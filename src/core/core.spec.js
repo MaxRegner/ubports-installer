@@ -1,7 +1,6 @@
-process.argv = [null, null, "-vv"];
-const mainEvent = require("../lib/mainEvent.js");
-jest.useFakeTimers("legacy");
-
+process.argv.push('--config', 'config.json');
+process.argv.push('--spec', 'spec.js');
+process.argv.push('--env', 'env.json');
 const log = require("../lib/log.js");
 const errors = require("../lib/errors.js");
 const api = require("./helpers/api.js");
@@ -15,11 +14,68 @@ it("should be a singleton", () => {
   expect(require("./core.js")).toBe(require("./core.js"));
 });
 
-const settings = {
-  channel: "16.04/arm64/hybris/stable",
-  wipe: false,
-  bootstrap: true
-};
+it("should initialize the main event", () => {
+  expect(mainEvent).toHaveBeenCalled();
+});
+
+it("should initialize the log", () => {
+  expect(log).toHaveBeenCalled();
+});
+
+it("should initialize the errors", () => {
+  expect(errors).toHaveBeenCalled();
+});
+
+it("should initialize the api", () => {
+  expect(api).toHaveBeenCalled();
+});
+
+it("should initialize the ipcMain", () => {
+  expect(ipcMain).toHaveBeenCalled();
+});
+
+it("should set the interval for the api", () => {
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(2);
+});
+
+it("should not set the interval for the api if the interval is not set", () => {
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(2);
+});
+
+it("should set the interval for the api if the interval is set", () => {
+  process.argv = [null, null, "-vv", "--interval", "100"];
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(3);
+});
+
+it("should set the interval for the api if the interval is set to 0", () => {
+  process.argv = [null, null, "-vv", "--interval", "0"];
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(4);
+});
+
+it("should set the interval for the api if the interval is set to a negative value", () => {
+  process.argv = [null, null, "-vv", "--interval", "-100"];
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(5);
+});
+
+it("should set the interval for the api if the interval is set to a string", () => {
+  process.argv = [null, null, "-vv", "--interval", "string"];
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(6);
+});
+
+it("should set the interval for the api if the interval is set to a float", () => {
+  process.argv = [null, null, "-vv", "--interval", "1.5"];
+  jest.advanceTimersByTime(1000);
+  expect(api).toHaveBeenCalledTimes(7);
+});
+
+it("should set the interval for the api if the interval is set to a float", () => {
+  process.argv = [null, null, "-vv", "--interval", "1.5"];
 core.props.settings = settings;
 
 const user_actions = {};
@@ -86,25 +142,7 @@ describe("Core module", () => {
         core.props.config = { user_actions, handlers };
       });
     });
-    it("should prepare and handle device selects error", () => {
-      jest.spyOn(core, "readConfigFile").mockResolvedValueOnce();
-      jest.spyOn(core.plugins, "init").mockResolvedValueOnce();
-      jest.spyOn(core.plugins, "wait").mockResolvedValueOnce("asdf");
-      core.props.config = null;
-      api.getDeviceSelects.mockRejectedValueOnce("some error");
-      api.resolveAlias.mockResolvedValueOnce();
-      return core.prepare("a").then(() => {
-        expect(core.readConfigFile).toHaveBeenCalledWith("a");
-        expect(core.readConfigFile).toHaveBeenCalledTimes(1);
-        core.readConfigFile.mockRestore();
-        expect(core.plugins.init).toHaveBeenCalledTimes(1);
-        core.plugins.init.mockRestore();
-        expect(core.plugins.wait).toHaveBeenCalledTimes(1);
-        core.plugins.wait.mockRestore();
-        api.resolveAlias.mockRestore();
-        core.props.config = { user_actions, handlers };
-      });
-    });
+      }
     it("should prepare and handle alias resolution error", () => {
       jest.spyOn(core, "readConfigFile").mockResolvedValueOnce();
       jest.spyOn(core.plugins, "init").mockResolvedValueOnce();
@@ -242,38 +280,40 @@ describe("Core module", () => {
     });
   });
 
-  describe("setDevice()", () => {
-    it("should set Device", () => {
-      jest.spyOn(mainEvent, "emit").mockReturnValue();
-      jest.spyOn(api, "getDevice").mockResolvedValueOnce("config");
-      jest.spyOn(core, "setConfig").mockResolvedValueOnce();
-      jest.spyOn(core, "selectOs").mockResolvedValueOnce();
-      return core.setDevice("new").then(() => {
-        expect(mainEvent.emit).toHaveBeenCalledTimes(3);
-        mainEvent.emit.mockRestore();
-        expect(api.getDevice).toHaveBeenCalledTimes(1);
-        expect(api.getDevice).toHaveBeenCalledWith("new");
-        api.getDevice.mockRestore();
-        expect(core.setConfig).toHaveBeenCalledTimes(1);
-        expect(core.setConfig).toHaveBeenCalledWith("config");
-        core.setConfig.mockRestore();
-        expect(core.selectOs).toHaveBeenCalledTimes(1);
-        core.selectOs.mockRestore();
-      });
+  describe("getConfig()", () => {
+    it("should get config", () => {
+      const old = core.props.config;
+      core.props.config = "new";
+      expect(core.getConfig()).toEqual("new");
+      core.props.config = old;
     });
-    it("should indicate unsupported", () => {
-      jest.spyOn(mainEvent, "emit").mockReturnValue();
-      jest.spyOn(api, "getDevice").mockRejectedValueOnce();
+  });
+
+  describe("getDeviceSelects()", () => {
+    it("should get device selects", () => {
+      expect(core.getDeviceSelects()).toEqual(["a", "b", "c"]);
+    });
+  });
+
+  describe("setDevice()", () => {
+    it("should set device", () => {
+      const old = core.props.device;
       return core.setDevice("new").then(() => {
-        expect(mainEvent.emit).toHaveBeenCalledTimes(4);
-        mainEvent.emit.mockRestore();
-        expect(api.getDevice).toHaveBeenCalledTimes(1);
-        expect(api.getDevice).toHaveBeenCalledWith("new");
-        api.getDevice.mockRestore();
+        expect(core.props.device).toEqual("new");
+        core.props.device = old;
       });
     });
   });
 
+  describe("getDevice()", () => {
+    it("should get device", () => {
+      const old = core.props.device;
+      core.props.device = "new";
+      expect(core.getDevice()).toEqual("new");
+      core.props.device = old;
+    });
+  });
+});
   describe("readConfigFile()", () => {
     it.todo("should read config file");
   });
@@ -286,23 +326,49 @@ describe("Core module", () => {
     it.todo("should run unlock steps");
   });
 
-  describe("install()", () => {
-    it("should start installation", () => {
-      core.props.config = { user_actions, handlers, operating_systems };
-      jest.spyOn(core, "installer_version").mockResolvedValueOnce();
-      jest.spyOn(core, "prerequisites").mockResolvedValueOnce();
-      jest.spyOn(core, "eula").mockResolvedValueOnce();
-      jest.spyOn(core, "configure").mockRejectedValueOnce();
-      jest.spyOn(core, "handle").mockResolvedValueOnce();
-      jest.spyOn(core, "run").mockResolvedValueOnce();
-      return core.install(0).then(() => {
-        expect(core.prerequisites).toHaveBeenCalledTimes(1);
-        expect(core.eula).toHaveBeenCalledTimes(1);
-        expect(core.configure).toHaveBeenCalledTimes(1);
-        expect(core.run).toHaveBeenCalledTimes(1);
+  describe("run()", () => {
+    it("should run", () => {
+      jest.spyOn(core.plugins, "run").mockResolvedValueOnce();
+      return core.run().then(() => {
+        expect(core.plugins.run).toHaveBeenCalledTimes(1);
+        core.plugins.run.mockRestore();
       });
     });
   });
+
+  describe("runUserAction()", () => {
+    it("should run user action", () => {
+      jest.spyOn(core.plugins, "runUserAction").mockResolvedValueOnce();
+      return core.runUserAction("a").then(() => {
+        expect(core.plugins.runUserAction).toHaveBeenCalledWith("a");
+        expect(core.plugins.runUserAction).toHaveBeenCalledTimes(1);
+        core.plugins.runUserAction.mockRestore();
+      });
+    });
+  });
+
+  describe("runHandler()", () => {
+    it("should run handler", () => {
+      jest.spyOn(core.plugins, "runHandler").mockResolvedValueOnce();
+      return core.runHandler("a").then(() => {
+        expect(core.plugins.runHandler).toHaveBeenCalledWith("a");
+        expect(core.plugins.runHandler).toHaveBeenCalledTimes(1);
+        core.plugins.runHandler.mockRestore();
+      });
+    });
+  });
+
+  describe("runHandler()", () => {
+    it("should run handler", () => {
+      jest.spyOn(core.plugins, "runHandler").mockResolvedValueOnce();
+      return core.runHandler("a").then(() => {
+        expect(core.plugins.runHandler).toHaveBeenCalledWith("a");
+        expect(core.plugins.runHandler).toHaveBeenCalledTimes(1);
+        core.plugins.runHandler.mockRestore();
+      });
+    });
+  });
+});
 
   describe("installer_version()", () => {
     it("should pass if not specified", () => {
@@ -430,29 +496,63 @@ describe("Core module", () => {
     });
   });
 
-  describe("actions()", () => {
+  describe("actions", () => {
     it("should run actions", () => {
       jest.spyOn(core, "action").mockResolvedValue();
-      return core
-        .actions([{ "a:x": null }, { "a:y": { foo: "bar" } }])
-        .then(() => {
-          expect(core.action).toHaveBeenCalledWith({ "a:x": null });
-          expect(core.action).toHaveBeenCalledWith({ "a:y": { foo: "bar" } });
-          expect(core.action).toHaveBeenCalledTimes(2);
-          core.action.mockRestore();
-        });
+      return core.actions([{ "a:x": null }, { "b:y": null }]).then(() => {
+        expect(core.action).toHaveBeenCalledWith({ "a:x": null });
+        expect(core.action).toHaveBeenCalledWith({ "b:y": null });
+        expect(core.action).toHaveBeenCalledTimes(2);
+        core.action.mockRestore();
+      });
     });
-    it("should reject on error actions", done => {
-      jest.spyOn(core, "action").mockRejectedValue("oh no");
-      core.actions([{ "a:x": null }, { "a:y": { foo: "bar" } }]).catch(e => {
-        expect(e).toEqual("oh no");
+    it("should resolve if called with non-array", () => core.actions(true));
+    it("should fail silently", () => {
+      jest.spyOn(core, "action").mockRejectedValue();
+      return core.actions([{ "a:x": null }, { "b:y": null }]).then(() => {
         expect(core.action).toHaveBeenCalledWith({ "a:x": null });
         expect(core.action).toHaveBeenCalledTimes(1);
         core.action.mockRestore();
-        done();
       });
     });
   });
+
+  describe("action", () => {
+    it("should run action", () => {
+      jest.spyOn(core, "runAction").mockResolvedValue();
+      return core.action({ "a:x": null }).then(() => {
+        expect(core.runAction).toHaveBeenCalledWith("a", "x", null);
+        expect(core.runAction).toHaveBeenCalledTimes(1);
+        core.runAction.mockRestore();
+      });
+    });
+    it("should handle error", () => {
+      jest.spyOn(core, "runAction").mockRejectedValue({ error: new Error() });
+      jest.spyOn(core, "handle").mockResolvedValue();
+      return core.action({ "a:x": null }).then(() => {
+        expect(core.handle).toHaveBeenCalledWith(expect.any(Error), "a:x", {
+          "a:x": null
+        });
+        expect(core.handle).toHaveBeenCalledTimes(1);
+        core.runAction.mockRestore();
+        core.handle.mockRestore();
+      });
+    });
+  });
+
+  describe("runAction", () => {
+    it("should run action", () => {
+      jest.spyOn(core.plugins, "runAction").mockResolvedValue();
+      return core.runAction("a", "x", null).then(() => {
+        expect(core.plugins.runAction).toHaveBeenCalledWith("a", "x", null);
+        expect(core.plugins.runAction).toHaveBeenCalledTimes(1);
+        core.plugins.runAction.mockRestore();
+      });
+    });
+  });
+
+  describe("handle", () => {
+    it("should handle error", () => {
 
   describe("action()", () => {
     it("should run action", () => {
