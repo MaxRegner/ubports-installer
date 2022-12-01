@@ -34,6 +34,18 @@
     overflow: hidden;
   }
 
+  .download-animation {
+    background-image: url("/animation/download.svg");
+    background-size: cover;
+    background-position: center;
+  }
+
+  .push-animation {
+    background-image: url("/animation/push.svg");
+    background-size: cover;
+    background-position: center;
+  }
+
   .download-animation,
   .push-animation {
     background-repeat: repeat;
@@ -64,7 +76,37 @@
       background-position: 0 0;
     }
     to {
-      background-position: 900px 0px;
+      background-position: 1200px 0;
+    }
+  }
+
+  @media (max-width: 600px) {
+    .download-animation {
+      background-image: url("../img/arrow-down.png");
+      animation: download-animation 8s linear infinite;
+    }
+
+    .push-animation {
+      background-image: url("../img/arrow-right.png");
+      animation: push-animation 10s linear infinite;
+    }
+
+    @keyframes download-animation {
+      from {
+        background-position: 0 0;
+      }
+      to {
+        background-position: 0 600px;
+      }
+    }
+
+    @keyframes push-animation {
+      from {
+        background-position: 0 0;
+      }
+      to {
+        background-position: 600px 0;
+      }
     }
   }
 </style>
