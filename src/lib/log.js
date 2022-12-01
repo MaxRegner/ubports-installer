@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * Copyright (C) 2017-2020 UBports Foundation <info@ubports.com>
+ * Copyright (C) 2020 UBports Foundation <info@ubports.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,155 +17,383 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-const winston = require("winston");
-const path = require("path");
-const { path: cachePath } = require("./cache.js");
+const log = require("./log.js");
+const settings = require("./settings.js");
+const window = require("./window.js");
+const { ipcMain, shell } = require("electron");
+const EventEmitter = require("events");
+const { prompt } = require("./prompt.js");
+const packageInfo = require("../../package.json");
 
-const levels = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  verbose: 3,
-  debug: 4,
-  command: 5
-};
+const mainEvent = new EventEmitter();
 
-/**
- * singleton for logging messages to stdout and the console
- */
-class Logger {
-  /**
-   * @constructs Logger
-   */
-  constructor() {
-    winston.addColors({
-      error: "red",
-      warn: "yellow",
-      info: "green",
-      verbose: "blue",
-      debug: "white",
-      command: "grey"
-    });
+// Restart the installer
+ipcMain.on("restart", () => {
+  mainEvent.emit("restart");
+});
 
-    this.logfile = new winston.transports.File({
-      filename: path.join(cachePath, "ubports-installer.log"),
-      options: { flags: "w" },
-      level: "command"
-    });
-    this.stdout = new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      ),
-      level: "info"
-    });
-    this.winston = winston.createLogger({
-      format: winston.format.json(),
-      levels,
-      transports: [this.logfile, this.stdout]
-    });
-  }
+// Error from the renderer process
+ipcMain.on("renderer:error", (event, error) => {
+  mainEvent.emit("user:error", error);
+});
 
-  /**
-   * Get log file contents
-   * @returns {Promise<String>} log file contents
-   */
-  get() {
-    const _this = this;
-    return new Promise(function (resolve, reject) {
-      _this.winston.query(
-        {
-          limit: 400,
-          start: 0,
-          order: "asc"
-        },
-        (err, results) => {
-          try {
-            if (err) {
-              reject(new Error(`Failed to read log: ${err}`));
-            } else {
-              resolve(
-                results.file
-                  .map(({ level, message }) => `${level}: ${message}`)
-                  .join("\n")
-              );
-            }
-          } catch (err) {
-            reject(new Error(`Failed to read log: ${err}`));
-          }
+// Open the bugreporting tool
+mainEvent.on("user:error", (error, restart, ignore) => {
+  try {
+    if (window.getMain()) {
+      window.send("user:error", error);
+      ipcMain.once("user:error:reply", (e, reply) => {
+        switch (reply) {
+          case "ignore":
+            log.warn("error ignored");
+            if (ignore) setTimeout(ignore, 500);
+            return;
+          case "restart":
+            log.warn("restart after error");
+            if (restart) setTimeout(restart, 500);
+            else mainEvent.emit("restart");
+            return;
+          case "bugreport":
+            return window.send("user:report");
+          default:
+            break;
         }
-      );
-    });
-  }
-
-  /**
-   * update stdout logging level
-   * @param {Number} [level] logging level
-   */
-  setLevel(level = 0) {
-    switch (level) {
-      case 1:
-        this.stdout.level = "verbose";
-        break;
-      case 2:
-        this.stdout.level = "debug";
-        break;
-      case 3:
-        this.stdout.level = "command";
-        break;
-      default:
-        this.stdout.level = "info";
-        break;
+      });
+    } else {
+      process.exit(1);
     }
+  } catch (e) {
+    process.exit(1);
   }
+});
 
-  /**
-   * log an error
-   * @param {String} message message to log
-   */
-  error(message) {
-    this.winston.log("error", message);
-  }
+// The device's bootloader is locked, prompt the user to unlock it
+mainEvent.on("user:oem-lock", (enable = false, code_url, unlock) => {
+  prompt({
+    title: enable ? "Failed to unlock bootloader" : "Bootloader locked",
+    description:
+      (enable
+        ? `Your device could not be unlocked. Please make sure OEM unlocking is enabled in the devices [developer options](https://www.thecustomdroid.com/enable-oem-unlocking-on-android/). After that, you can select the button below to continue the installation.`
+        : `Your device's bootloader is locked, that means installation of third party operating systems like Ubuntu Touch is disabled.
 
-  /**
-   * log a warning
-   * @param {String} message message to log
-   */
-  warn(message) {
-    this.winston.log("warn", message);
-  }
+**Removing this lock might void the warranty. If you want to be sure, please ask your manufacturer or vendor if they allow this. UBports is not responsible and won't replace devices in case of warranty loss. You are responsible for your own actions.**
 
-  /**
-   * log an info
-   * @param {String} message message to log
-   */
-  info(message) {
-    this.winston.log("info", message);
-  }
+Do you want to unlock your device now?
 
-  /**
-   * log a verbose message
-   * @param {String} message message to log
-   */
-  verbose(message) {
-    this.winston.log("verbose", message);
-  }
+You might see a confirmation dialog on your device next.`) +
+      (code_url
+        ? `\n\nYou have to obtain an unlocking code from [your vendor](${code_url}). Please enter the code below and click the button to continue.`
+        : ""),
+    fields: code_url
+      ? [
+          {
+            var: "code",
+            name: "Code",
+            type: "text",
+            placeholder: "unlock code",
+            link: code_url
+          }
+        ]
+      : []
+  }).then(({ code }) => {
+    mainEvent.emit("user:write:working", "squares");
+    mainEvent.emit("user:write:status", "Unlocking", true);
+    mainEvent.emit(
+      "user:write:under",
+      "You might see a confirmation dialog on your device."
+    );
+    unlock(code);
+  });
+});
 
-  /**
-   * log a debug message
-   * @param {String} message message to log
-   */
-  debug(message) {
-    this.winston.log("debug", message);
-  }
+// update
+mainEvent.on("user:update-available", (updateUrl, prerelease) => {
+  log.warn(
+    "Please update: " +
+      (packageInfo.package === "snap"
+        ? "snap refresh ubports-installer --stable"
+        : updateUrl)
+  );
+  prompt({
+    title: prerelease
+      ? `Prerelease ${packageInfo.version}`
+      : "Update available!",
+    dismissable: true,
+    description:
+      "You are " +
+      (prerelease ? "running a prerelease" : "not running the latest stable") +
+      " version. Using the latest stable release is recommended for most users. You can still use this version, but there might be bugs and issues that do not affect the stable release.\n\n" +
+      (packageInfo.package === "snap"
+        ? "Run `snap refresh ubports-installer --stable` in your terminal to install the latest version"
+        : `Please download the [latest version](${updateUrl})`) +
+      (prerelease ? ", unless you know what you're doing." : "."),
+    confirm: "Download"
+  }).then(() => shell.openExternal(updateUrl));
+});
 
-  /**
-   * log a command
-   * @param {String} message message to log
-   */
-  command(message) {
-    this.winston.log("command", message);
-  }
+// eula
+mainEvent.on("user:eula", (eula, resolve) => {
+  prompt({ ...eula, confirm: "I agree" }).then(resolve);
+});
+
+// unlock
+mainEvent.on("user:unlock", (fields, resolve) => {
+  prompt({
+    title: "Unlock your device",
+    description:
+      "The following actions are required for the installer to work.",
+    fields,
+    confirm: "My device is unlocked"
+  }).then(resolve);
+});
+
+// installer_version_plasma_mobile
+mainEvent.on("user:installer_version_plasma_mobile", (version, resolve) => {
+  prompt({
+    title: "Plasma Mobile",
+    description:
+      "The following actions are required for the installer to work.",
+    fields: [
+      {
+        var: "version",
+        name: "Version",
+        type: "text",
+        placeholder: "version",
+        value: version
+      }
+    ],
+    confirm: "My device is unlocked"
+  }).then(resolve);
+});
+
+// installer_version
+mainEvent.on("user:installer_version", (version, resolve) => {
+  prompt({
+    title: "Installer version",
+    description:
+      "The following actions are required for the installer to work.",
+    fields: [
+      {
+        var: "version",
+        name: "Version",
+        type: "text",
+        placeholder: "version",
+        value: version
+      }
+    ],
+    confirm: "My device is unlocked"
+  }).then(resolve);
+});
+
+// fastboot
+mainEvent.on("user:fastboot oem unlock", (resolve, reject) => { // fastboot oem unlock
+  prompt({
+    title: "Unlock your device",
+    description:
+      "The following actions are required for the installer to work.",
+    fields: [
+      {
+        var: "unlock",
+        name: "Unlock",
+        type: "text",
+        placeholder: "unlock",
+        value: "fastboot oem unlock"
+      }
+    ],
+    confirm: "My device is unlocked"
+  }).then(resolve);
 }
 
-module.exports = new Logger();
+// prerequisites
+mainEvent.on("user:prerequisites", (fields, resolve) => {
+  prompt({
+    title: "Prerequisites",
+    description: "The following actions are required to install this OS.",
+    fields,
+    confirm: "Continue"
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure", (fields, resolve) => {
+  window.send("user:configure");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_plasma_mobile", (fields, resolve) => {
+  window.send("user:configure_plasma_mobile");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch_legacy", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch_legacy");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch_rc", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch_rc");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch_stable", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch_stable");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch_devel", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch_devel");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+  }).then(resolve);
+});
+
+// configure
+mainEvent.on("user:configure_ubuntu_touch_edge", (fields, resolve) => {
+  window.send("user:configure_ubuntu_touch_edge");
+  prompt({
+    title: "Installation options",
+    dismissable: false,
+    description: "Configure the installation of your new operating system",
+    fields
+
+// Control the progress bar
+mainEvent.on("user:write:progress", progress => {
+  window.send("user:write:progress", progress);
+});
+
+// Installation successfull
+mainEvent.on("user:write:done", () => {
+  window.send("user:write:done");
+  window.send("user:write:speed");
+  log.info(
+    "All done! Your device will now reboot and complete the installation. Enjoy exploring Ubuntu Touch!"
+  );
+  if (!settings.get("never.opencuts")) {
+    setTimeout(() => {
+      window.send("user:report", true);
+    }, 1500);
+  }
+});
+
+// Show working animation
+mainEvent.on("user:write:working", animation => {
+  window.send("user:write:working", animation);
+});
+
+// Set the top text in the footer
+mainEvent.on("user:write:status", (status, waitDots) => {
+  window.send("user:write:status", status, waitDots);
+});
+
+// Set the speed part of the footer
+mainEvent.on("user:write:speed", speed => {
+  window.send("user:write:speed", speed);
+});
+
+// Set the lower text in the footer
+mainEvent.on("user:write:under", status => {
+  window.send("user:write:under", status);
+});
+
+// Device is unsupported
+mainEvent.on("user:device-unsupported", device => {
+  log.warn("The device " + device + " is not supported!");
+  window.send("user:device-unsupported", device);
+});
+
+// No internet connection
+mainEvent.on("user:no-network", () => {
+  prompt({
+    title: "Internet connection lost",
+    dismissable: true,
+    description:
+      "The installer failed to connect to the UBports servers. Are you connected to the internet? If you're using a proxy, you might have to [configure it](https://www.golinuxcloud.com/set-up-proxy-http-proxy-environment-variable/) by setting the **https_proxy** environment variable.",
+    confirm: "Try again"
+  }).then(() => mainEvent.emit("restart"));
+});
+
+// Visual C++ 2012 Redistributables x86 are not installed
+mainEvent.on("user:no-msvc2012x86", () => {
+  prompt({
+    title: "Missing Dependencies",
+    dismissable: true,
+    description: `Your computer is missing the Visual C++ 2012 32-bit libraries. The installer will be unable to detect or flash Samsung devices.
+
+Please download and install \`vcredist_x86.exe\` from [Microsoft's download page](https://www.microsoft.com/en-us/download/details.aspx?id=30679) and try again.
+
+If you will not be installing on a Samsung device, you can continue without Samsung device support.`,
+    confirm: "Try again"
+  }).then(() => mainEvent.emit("restart"));
+});
+
+// Connection to the device was lost
+mainEvent.on("user:connection-lost", reconnect => {
+  log.warn("lost connection to device");
+  prompt({
+    title: "Connection to device lost",
+    description: `The connection to your device was lost. Please make sure your device is still connected and do not disconnect your device again until the installation is finished.
+
+If this continues to happen, you might want to try using a different USB cable. Old cables tend to become less reliable. Please try using a different USB cable and do not touch the device during the installation, unless you are prompted to do so.`,
+    confirm: "Reconnect"
+  }).then(() => {
+    if (reconnect) setTimeout(reconnect, 500);
+    else mainEvent.emit("restart");
+  });
+});
+
+// The device battery is too low to install
+mainEvent.on("user:low-power", () => {
+  prompt({
+    title: "Low Power",
+    description: `The battery of your device is critically low. This can cause severe Problems while flashing.
+
+Please let your device charge for a while and try again.`,
+    confirm: "Try again"
+  }).then(() => mainEvent.emit("restart"));
+});
+
+module.exports = mainEvent;
