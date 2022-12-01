@@ -17,7 +17,7 @@ const { download, checkFile } = require("progressive-downloader");
 const { writeFile } = require("fs-extra");
 const core = new (require("./plugin.js"))(
   {
-    os: { name: "Ubuntu Touch" },
+    os: { name: "Plasma Mobile" },
     config: { codename: "yggdrasil" }
   },
   "a",
@@ -25,21 +25,68 @@ const core = new (require("./plugin.js"))(
   log
 );
 
-describe("core plugin", () => {
-  describe("action__end()", () => {
-    it("should display end screen", () => {
-      return core.action__end().then(r => {
-        expect(r).toEqual(undefined);
-        expect(mainEvent.emit).toHaveBeenCalledWith("user:write:done");
-        expect(mainEvent.emit).toHaveBeenCalledWith(
-          "user:write:status",
-          "Ubuntu Touch successfully installed!",
-          false
+describe("Plugin", () => {
+  describe("download", () => {
+    it("should download", () => {
+      jest.spyOn(core, "checkFile").mockResolvedValue(true);
+      jest.spyOn(core, "downloadFile").mockResolvedValue(true);
+      return core.download().then(() => {
+        expect(core.checkFile).toHaveBeenCalledTimes(1);
+        expect(core.downloadFile).toHaveBeenCalledTimes(1);
+        core.checkFile.mockRestore();
+        core.downloadFile.mockRestore();
+      });
+    });
+    it("should not download if not needed", () => {
+      jest.spyOn(core, "checkFile").mockResolvedValue(false);
+      jest.spyOn(core, "downloadFile").mockResolvedValue(true);
+      return core.download().then(() => {
+        expect(core.checkFile).toHaveBeenCalledTimes(1);
+        expect(core.downloadFile).toHaveBeenCalledTimes(0);
+        core.checkFile.mockRestore();
+        core.downloadFile.mockRestore();
+      });
+    });
+  });
+  describe("checkFile", () => {
+    it("should check file", () => {
+      jest.spyOn(core, "downloadFile").mockResolvedValue(true);
+      return core.checkFile().then(r => {
+        expect(r).toBeTruthy();
+        expect(core.downloadFile).toHaveBeenCalledTimes(0);
+        core.downloadFile.mockRestore();
+      });
+    });
+    it("should check file and download", () => {
+      jest.spyOn(core, "downloadFile").mockResolvedValue(true);
+      return core.checkFile("a", "b").then(r => {
+        expect(r).toBeTruthy();
+        expect(core.downloadFile).toHaveBeenCalledTimes(1);
+        core.downloadFile.mockRestore();
+      });
+    });
+  });
+  describe("downloadFile", () => {
+    it("should download file", () => {
+      jest.spyOn(download, "download").mockResolvedValue(true);
+      return core.downloadFile("a", "b").then(r => {
+        expect(r).toBeTruthy();
+        expect(download.download).toHaveBeenCalledTimes(1);
+        expect(download.download).toHaveBeenCalledWith(
+          "a",
+          "b",
+          expect.anything(),
+          expect.anything()
         );
-        expect(mainEvent.emit).toHaveBeenCalledWith(
-          "user:write:under",
-          "All done! Enjoy exploring your new OS!"
-        );
+        download.download.mockRestore();
+      });
+    });
+    it("should download file and unpack", () => {
+      jest.spyOn(download, "download").mockResolvedValue(true);
+      return core.downloadFile("a", "b", true).then(r => {
+        expect(r).toBeTruthy();
+        expect(download.download).toHaveBeenCalledTimes(1);
+        expect(download.download).toHaveBeenCalledWith
         expect(mainEvent.emit).toHaveBeenCalledTimes(3);
       });
     });
